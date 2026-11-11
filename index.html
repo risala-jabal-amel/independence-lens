@@ -389,6 +389,7 @@ form.addEventListener("change", e => {
 });
 
 /* ---------- الإرسال ---------- */
+const CHUNK = 1572864; // 1.5 ميغابايت لكل جزء (من مضاعفات 3 كي تتصل أجزاء base64 مباشرة)
 const readB64 = file => new Promise((res, rej) => {
   const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = () => rej(r.error); r.readAsDataURL(file);
 });
@@ -436,6 +437,7 @@ const demo = {
   async finish(p) { await sleep(400); return { ok: true, number: p.number, photos: p._photos }; }
 };
 
+let stage = "";
 let session = null; // { number, token, phone } — يُحفظ ليُستأنف الإرسال بالرقم نفسه عند إعادة المحاولة
 
 form.addEventListener("submit", async e => {
@@ -463,6 +465,7 @@ form.addEventListener("submit", async e => {
   };
   try {
     // 1) حجز الرقم (أو استئناف الرقم المحجوز إن كانت هذه إعادة محاولة بالهاتف نفسه)
+    stage = "حجز الرقم";
     if (!session || normPhone(session.phone) !== normPhone(info.phone)) {
       const res = DEMO ? await demo.register() : await postRetry({ action: "register", ...info, count: cards.length, test: TEST ? CONFIG.TEST_KEY : undefined }, null, "حجز الرقم");
       if (!res.ok) return fail(res);
@@ -475,21 +478,34 @@ form.addEventListener("submit", async e => {
       const c = cards[i];
       const label = n > 1 ? `الصورة ${i ? "الثانية" : "الأولى"}` : "الصورة";
       progress(5 + 90 * i / n, `جارٍ تجهيز ${label}…`);
+      const file = c._file, parts = Math.max(1, Math.ceil(file.size / CHUNK));
+      const show = f => progress(5 + 90 * (i + f) / n, f < 1 ? `جارٍ رفع ${label}… ${Math.round(f * 100)}%` : `جارٍ حفظ ${label}…`);
       const p = {
         action: "photo", number: session.number, token: session.token, index: i + 1,
         title: c.querySelector('[data-f="title"] input').value.trim(),
         place: c.querySelector('[data-f="place"] input').value.trim(),
         device: c.querySelector('[data-f="device"] input:checked').value,
-        fileName: c._file.name, mimeType: c._file.type || "image/heic",
-        data: await readB64(c._file)
+        fileName: file.name, mimeType: file.type || "image/heic", parts
       };
-      const onUp = f => progress(5 + 90 * (i + f) / n, f < 1 ? `جارٍ رفع ${label}… ${Math.round(f * 100)}%` : `جارٍ حفظ ${label}…`);
-      const res = DEMO ? await demo.photo(p, onUp) : await postRetry(p, onUp, `رفع ${label}`);
+      let res;
+      if (DEMO) res = await demo.photo(p, show);
+      else {
+        stage = `رفع ${label}`;
+        for (let k = 0; k < parts; k++) {
+          const data = await readB64(file.slice(k * CHUNK, (k + 1) * CHUNK));
+          const r = await postRetry({ action: "chunk", number: session.number, token: session.token, index: i + 1, part: k + 1, parts, data },
+                                    f => show((k + f) / parts * 0.97), `رفع ${label}`);
+          if (!r.ok) return fail(r);
+        }
+        show(1);
+        stage = `حفظ ${label}`;
+        res = await postRetry(p, null, `حفظ ${label}`);
+      }
       if (!res.ok) return fail(res);
       done.push(res.photo);
     }
     // 3) تثبيت المشاركة
-    progress(97, "جارٍ تثبيت مشاركتك…");
+    progress(97, "جارٍ تثبيت مشاركتك…"); stage = "تثبيت المشاركة";
     const fin = { action: "finish", number: session.number, token: session.token, count: n };
     const res = DEMO ? await demo.finish({ ...fin, _photos: done }) : await postRetry(fin, null, "تثبيت المشاركة");
     if (!res.ok) return fail(res);
@@ -499,7 +515,7 @@ form.addEventListener("submit", async e => {
     showDone();
   } catch (err) {
     busy(false);
-    showError("تعذّر الاتصال. تأكد من الإنترنت ثم اضغط «إرسال المشاركة» مجدداً: سيُستأنف الإرسال بالرقم نفسه. إن كانت الصورة كبيرة فقد يستغرق الرفع وقتاً أطول.");
+    showError(`تعذّر الاتصال أثناء ${stage || "الإرسال"}. تأكد من الإنترنت ثم اضغط «إرسال المشاركة» مجدداً: سيُستأنف الإرسال بالرقم نفسه. (${err && err.message || err})`);
   }
 });
 
