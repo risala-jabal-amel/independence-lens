@@ -411,8 +411,9 @@ function post(payload, onUp) {
     xhr.open("POST", CONFIG.SCRIPT_URL);
     xhr.setRequestHeader("Content-Type", "text/plain;charset=utf-8");
     xhr.timeout = 300000;
-    if (onUp) xhr.upload.onprogress = e => { if (e.lengthComputable) onUp(e.loaded / e.total); };
-    xhr.onload = () => { try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("bad")); } };
+    // لا نراقب تقدّم الرفع داخل الطلب: مراقبته تجعل المتصفح يرسل طلب «فحص مسبق» يرفضه Google Apps Script.
+    // التقدّم يُحسب بدلاً من ذلك بعدد الأجزاء المرفوعة.
+    xhr.onload = () => { if (onUp) onUp(1); try { resolve(JSON.parse(xhr.responseText)); } catch { reject(new Error("bad")); } };
     xhr.onerror = () => reject(new Error("net"));
     xhr.ontimeout = () => reject(new Error("timeout"));
     xhr.send(JSON.stringify(payload));
